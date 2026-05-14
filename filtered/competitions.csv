@@ -1,0 +1,3 @@
+competition_id,competition_code,name,sub_type,type,country_id,country_name,domestic_league_code,confederation,total_clubs,url
+ES1,laliga,laliga,first_tier,domestic_league,157,Spain,ES1,europa,20.0,https://www.transfermarkt.co.uk/laliga/startseite/wettbewerb/ES1
+GB1,premier-league,premier-league,first_tier,domestic_league,189,England,GB1,europa,20.0,https://www.transfermarkt.co.uk/premier-league/startseite/wettbewerb/GB1
