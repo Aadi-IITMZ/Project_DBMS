@@ -1,7 +1,7 @@
 # Football Transfer Market Analytics Platform
 
-**Track C — Advanced Schema and Analytics Platform** Dataset: Transfermarkt (Kaggle: davidcariboo/player-scores) Scope: Premier League \+ La Liga, 2015–2023
-
+**Track C — Advanced Schema and Analytics Platform** Dataset: Transfermarkt (Kaggle: davidcariboo/player-scores) Scope: Premier League \+ La Liga, 2015–2023  
+GitHub: [https://github.com/Aadi-IITMZ/Project\_DBMS](https://github.com/Aadi-IITMZ/Project_DBMS)  
 ---
 
 ## Dataset Manipulation/Filtering
