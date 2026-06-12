@@ -290,3 +290,373 @@ GROUP  BY c.club_id, c.name, t.season
 ORDER  BY c.name, t.season;
 
 
+-- ============================================================
+-- MILESTONE 3 QUERIES (Q13 - Q22)
+-- Completing the required 20 queries for Track C
+-- ============================================================
+-- Query index (continued):
+--   Q13  RECURSIVE CTE    — Trace a player's full transfer chain
+--   Q14  TRANSACTION      — Atomically transfer a player between clubs
+--   Q15  AGG-3            — Top 10 nationalities by avg peak market value
+--   Q16  AGG-4            — Goals + assists per 90 minutes by position
+--   Q17  JOIN + SUBQUERY  — Players transferred within 1 year of peak value
+--   Q18  JOIN + CTE       — Clubs that bought and sold the same player
+--   Q19  WINDOW-3         — Year-on-year % change in club transfer spend
+--   Q20  WINDOW-4         — Moving average of player market value over time
+--   Q21  SUB + AGG        — League comparison: avg fee vs avg player value
+--   Q22  STORED PROCEDURE — Update player's club after a new transfer
+-- ============================================================
+
+SELECT player_id, name FROM players WHERE name LIKE '%Case%';
+
+-- ============================================================
+-- Q13 | RECURSIVE CTE | Player Transfer Chain
+-- Traces the full career transfer history of a player by
+-- recursively following their moves from club to club.
+-- Demonstrates recursive CTE — mandatory Track C requirement.
+-- To trace a different player, change the player_id in the
+-- anchor member.
+-- ============================================================
+WITH RECURSIVE transfer_chain AS (
+
+    -- Anchor: first recorded transfer for the player
+    SELECT
+        t.transfer_id,
+        t.player_id,
+        t.from_club_id,
+        t.to_club_id,
+        t.season,
+        t.fee_euros,
+        1 AS depth
+    FROM   transfers t
+    WHERE  t.player_id = 16306
+    AND    t.from_club_id IS NOT NULL
+
+    UNION ALL
+
+    -- Recursive: follow the player to their next club
+    SELECT
+        t.transfer_id,
+        t.player_id,
+        t.from_club_id,
+        t.to_club_id,
+        t.season,
+        t.fee_euros,
+        tc.depth + 1
+    FROM   transfers      t
+    JOIN   transfer_chain tc ON t.from_club_id = tc.to_club_id
+                             AND t.player_id   = tc.player_id
+                             AND t.season      > tc.season
+    WHERE  tc.depth < 10   -- guard against infinite loops
+)
+SELECT
+    p.name                              AS player,
+    fc.name                             AS from_club,
+    toc.name                            AS to_club,
+    tc.season,
+    ROUND(tc.fee_euros / 1e6, 2)        AS fee_millions,
+    tc.depth                            AS transfer_number
+FROM   transfer_chain tc
+JOIN   players p   ON p.player_id  = tc.player_id
+LEFT JOIN clubs fc  ON fc.club_id  = tc.from_club_id
+LEFT JOIN clubs toc ON toc.club_id = tc.to_club_id
+ORDER  BY tc.depth;
+
+
+-- ============================================================
+-- Q14 | STORED PROCEDURE | Complete Player Transfer
+-- Transfers a player to a new club by:
+--   1. Validating player and both clubs exist
+--   2. Inserting a full transfer record with fee and type
+--   3. Updating the player's current club atomically
+--
+-- HOW TO RUN:
+--   CALL transfer_player(player_id, to_club_id, fee_in_euros);
+--   Example: CALL transfer_player(3109, 5, 50000000);
+--   For a free transfer: CALL transfer_player(3109, 5, 0);
+-- ============================================================
+CREATE OR REPLACE PROCEDURE transfer_player(
+    p_player_id   INT,
+    p_to_club_id  INT,
+    p_fee_euros   NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from_club_id    INT;
+    v_transfer_type   INT;
+BEGIN
+    -- Validate player exists
+    IF NOT EXISTS (SELECT 1 FROM players WHERE player_id = p_player_id) THEN
+        RAISE EXCEPTION 'Player with id % does not exist', p_player_id;
+    END IF;
+
+    -- Validate destination club exists
+    IF NOT EXISTS (SELECT 1 FROM clubs WHERE club_id = p_to_club_id) THEN
+        RAISE EXCEPTION 'Club with id % does not exist', p_to_club_id;
+    END IF;
+
+    -- Get player's current club
+    SELECT current_club_id INTO v_from_club_id
+    FROM   players WHERE player_id = p_player_id;
+
+    -- Determine transfer type from fee
+    IF p_fee_euros = 0 THEN
+        SELECT transfer_type_id INTO v_transfer_type
+        FROM   transfer_types WHERE type_name = 'free transfer';
+    ELSIF p_fee_euros IS NULL THEN
+        SELECT transfer_type_id INTO v_transfer_type
+        FROM   transfer_types WHERE type_name = 'undisclosed';
+    ELSE
+        SELECT transfer_type_id INTO v_transfer_type
+        FROM   transfer_types WHERE type_name = 'permanent';
+    END IF;
+
+    -- Insert transfer record
+    INSERT INTO transfers (
+        player_id, from_club_id, to_club_id,
+        transfer_type_id, season, fee_euros
+    ) VALUES (
+        p_player_id,
+        v_from_club_id,
+        p_to_club_id,
+        v_transfer_type,
+        2023,
+        NULLIF(p_fee_euros, 0)
+    );
+
+    -- Update player's current club
+    UPDATE players
+    SET    current_club_id = p_to_club_id
+    WHERE  player_id = p_player_id;
+
+    RAISE NOTICE 'Player % successfully transferred to club % for €%',
+        p_player_id, p_to_club_id, p_fee_euros;
+END;
+$$;
+
+-- Test call (transfer Steven Gerrard to Barcelona for €50m):
+-- CALL transfer_player(3109, 5, 50000000);
+
+
+-- ============================================================
+-- Q15 | AGGREGATION 3 | Top 10 Nationalities by Peak Value
+-- Groups players by nationality and calculates their average
+-- peak market value. Shows which countries produce the most
+-- valuable players on average.
+-- ============================================================
+SELECT
+    p.nationality,
+    COUNT(DISTINCT p.player_id)                 AS player_count,
+    ROUND(AVG(peak.max_value) / 1e6, 2)         AS avg_peak_value_millions,
+    ROUND(MAX(peak.max_value) / 1e6, 2)         AS highest_peak_millions
+FROM   players p
+JOIN (
+    SELECT   player_id, MAX(value_euros) AS max_value
+    FROM     market_valuations
+    GROUP BY player_id
+) peak ON peak.player_id = p.player_id
+WHERE  p.nationality IS NOT NULL
+GROUP  BY p.nationality
+HAVING COUNT(DISTINCT p.player_id) >= 5   -- at least 5 players per nationality
+ORDER  BY avg_peak_value_millions DESC
+LIMIT  10;
+
+
+-- ============================================================
+-- Q16 | AGGREGATION 4 | Goals + Assists per 90 Minutes
+-- Calculates attacking contribution per 90 minutes for each
+-- position group. Filters out players with minimal minutes
+-- to avoid skewed ratios from rare appearances.
+-- ============================================================
+SELECT
+    p.position,
+    COUNT(DISTINCT p.player_id)                             AS players,
+    ROUND(SUM(a.goals)::numeric   / NULLIF(SUM(a.minutes_played), 0) * 90, 2)
+                                                            AS goals_per_90,
+    ROUND(SUM(a.assists)::numeric / NULLIF(SUM(a.minutes_played), 0) * 90, 2)
+                                                            AS assists_per_90,
+    ROUND((SUM(a.goals) + SUM(a.assists))::numeric
+          / NULLIF(SUM(a.minutes_played), 0) * 90, 2)      AS contributions_per_90
+FROM   appearances a
+JOIN   players     p ON p.player_id = a.player_id
+WHERE  a.minutes_played >= 90   -- at least one full game worth of minutes
+AND    p.position IS NOT NULL
+GROUP  BY p.position
+ORDER  BY contributions_per_90 DESC;
+
+
+-- ============================================================
+-- Q17 | JOIN + SUBQUERY | Transfers Near Peak Value
+-- Finds players who were transferred within one season of
+-- reaching their peak recorded market value — indicating
+-- clubs sold at or near the optimal time.
+-- ============================================================
+SELECT
+    p.name                              AS player,
+    p.position,
+    p.nationality,
+    fc.name                             AS sold_by,
+    tc.name                             AS bought_by,
+    t.season                            AS transfer_season,
+    ROUND(peak.max_value   / 1e6, 2)   AS peak_value_millions,
+    ROUND(t.fee_euros      / 1e6, 2)   AS transfer_fee_millions
+FROM   transfers t
+JOIN   players   p   ON p.player_id  = t.player_id
+LEFT JOIN clubs  fc  ON fc.club_id   = t.from_club_id
+LEFT JOIN clubs  tc  ON tc.club_id   = t.to_club_id
+JOIN (
+    -- Subquery: get each player's peak value and the year it occurred
+    SELECT
+        mv.player_id,
+        MAX(mv.value_euros)                         AS max_value,
+        EXTRACT(YEAR FROM MAX(mv.valuation_date))   AS peak_year
+    FROM   market_valuations mv
+    GROUP  BY mv.player_id
+) peak ON peak.player_id = t.player_id
+WHERE  t.fee_euros IS NOT NULL
+AND    ABS(t.season - peak.peak_year) <= 1   -- transferred within 1 season of peak
+ORDER  BY peak.max_value DESC
+LIMIT  20;
+
+
+-- ============================================================
+-- Q18 | JOIN + CTE | Club Profit/Loss per Player
+-- Identifies clubs that both bought and sold the same player,
+-- then calculates the profit or loss made on that player.
+-- ============================================================
+WITH bought AS (
+    SELECT
+        to_club_id      AS club_id,
+        player_id,
+        fee_euros       AS buy_fee,
+        season          AS buy_season
+    FROM   transfers
+    WHERE  fee_euros IS NOT NULL
+    AND    to_club_id IS NOT NULL
+),
+sold AS (
+    SELECT
+        from_club_id    AS club_id,
+        player_id,
+        fee_euros       AS sell_fee,
+        season          AS sell_season
+    FROM   transfers
+    WHERE  fee_euros IS NOT NULL
+    AND    from_club_id IS NOT NULL
+)
+SELECT
+    c.name                                          AS club,
+    p.name                                          AS player,
+    b.buy_season,
+    s.sell_season,
+    ROUND(b.buy_fee  / 1e6, 2)                     AS bought_for_millions,
+    ROUND(s.sell_fee / 1e6, 2)                     AS sold_for_millions,
+    ROUND((s.sell_fee - b.buy_fee) / 1e6, 2)       AS profit_millions
+FROM   bought b
+JOIN   sold   s ON s.club_id   = b.club_id
+               AND s.player_id = b.player_id
+               AND s.sell_season > b.buy_season
+JOIN   clubs   c ON c.club_id  = b.club_id
+JOIN   players p ON p.player_id = b.player_id
+ORDER  BY profit_millions DESC
+LIMIT  20;
+
+
+-- ============================================================
+-- Q19 | WINDOW FUNCTION 3 | Year-on-Year Transfer Spend Change
+-- Uses LAG() window function to compare each club's transfer
+-- spend against the previous season, calculating the
+-- percentage change year on year.
+-- ============================================================
+SELECT
+    club,
+    season,
+    season_spend_millions,
+    prev_season_millions,
+    ROUND(
+        (season_spend_millions - prev_season_millions)
+        / NULLIF(prev_season_millions, 0) * 100
+    , 1)                            AS pct_change
+FROM (
+    SELECT
+        c.name                                      AS club,
+        t.season,
+        ROUND(SUM(t.fee_euros) / 1e6, 2)           AS season_spend_millions,
+        ROUND(LAG(SUM(t.fee_euros)) OVER (
+            PARTITION BY c.club_id
+            ORDER BY t.season
+        ) / 1e6, 2)                                AS prev_season_millions
+    FROM   transfers t
+    JOIN   clubs     c ON c.club_id = t.to_club_id
+    WHERE  t.fee_euros IS NOT NULL
+    GROUP  BY c.club_id, c.name, t.season
+) yoy
+WHERE  prev_season_millions IS NOT NULL
+ORDER  BY ABS(
+    (season_spend_millions - prev_season_millions)
+    / NULLIF(prev_season_millions, 0) * 100
+) DESC
+LIMIT  30;
+
+
+-- ============================================================
+-- Q20 | WINDOW FUNCTION 4 | Moving Average of Player Value
+-- Uses AVG() OVER with a sliding window frame to calculate
+-- a 3-snapshot moving average of a player's market value,
+-- smoothing out sudden spikes in valuation data.
+-- ============================================================
+SELECT
+    p.name                                          AS player,
+    p.position,
+    mv.valuation_date,
+    ROUND(mv.value_euros       / 1e6, 2)           AS value_millions,
+    ROUND(AVG(mv.value_euros) OVER (
+        PARTITION BY mv.player_id
+        ORDER BY mv.valuation_date
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) / 1e6, 2)                                    AS moving_avg_millions
+FROM   market_valuations mv
+JOIN   players           p ON p.player_id = mv.player_id
+WHERE  p.player_id IN (
+    -- Only show players with at least 5 valuation snapshots
+    SELECT player_id
+    FROM   market_valuations
+    GROUP  BY player_id
+    HAVING COUNT(*) >= 5
+)
+ORDER  BY p.name, mv.valuation_date
+LIMIT  100;
+
+
+-- ============================================================
+-- Q21 | SUBQUERY + AGGREGATION | League Fee vs Player Value
+-- Compares the average transfer fee paid in each league
+-- against the average market value of players bought,
+-- showing whether clubs pay above or below market value.
+-- ============================================================
+SELECT
+    comp.name                                       AS league,
+    ROUND(AVG(t.fee_euros)   / 1e6, 2)             AS avg_fee_paid_millions,
+    ROUND(AVG(player_val.avg_value) / 1e6, 2)      AS avg_player_value_millions,
+    ROUND((AVG(t.fee_euros) - AVG(player_val.avg_value))
+          / NULLIF(AVG(player_val.avg_value), 0) * 100, 1)
+                                                    AS pct_above_market_value
+FROM   transfers t
+JOIN   clubs     c    ON c.club_id          = t.to_club_id
+JOIN   competitions comp ON comp.competition_id = c.competition_id
+JOIN (
+    -- Subquery: average market value per player across all snapshots
+    SELECT   player_id, AVG(value_euros) AS avg_value
+    FROM     market_valuations
+    GROUP BY player_id
+) player_val ON player_val.player_id = t.player_id
+WHERE  t.fee_euros IS NOT NULL
+GROUP  BY comp.name
+ORDER  BY avg_fee_paid_millions DESC;
+
+
+
+
+
+
