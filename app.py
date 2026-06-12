@@ -17,6 +17,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import psycopg2
+from dotenv import load_dotenv
+import os
+
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -26,15 +29,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── DB config — update password ───────────────────────────────
+load_dotenv()
 DB_CONFIG = {
-    'host':     'localhost',
-    'port':     5432,
-    'dbname':   'football_analytics',
-    'user':     'postgres',
-    'password': 'your_password_here'
+    'host':     os.getenv('DB_HOST', 'localhost'),
+    'port':     int(os.getenv('DB_PORT', 5432)),
+    'dbname':   os.getenv('DB_NAME', 'football_analytics'),
+    'user':     os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', '')
 }
-
 # ── DB connection (cached so it doesn't reconnect every render)
 @st.cache_resource
 def get_connection():

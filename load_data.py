@@ -13,17 +13,17 @@ import psycopg2
 import pandas as pd
 import os
 from psycopg2.extras import execute_values
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
-# ── Database config — update these values ────────────────────
 DB_CONFIG = {
-    'host':     'localhost',
-    'port':     5432,
-    'dbname':   'football_analytics',   # your database name
-    'user':     'postgres',             # your PostgreSQL username
-    'password': 'your_password_here'    # your PostgreSQL password
+    'host':     os.getenv('DB_HOST', 'localhost'),
+    'port':     int(os.getenv('DB_PORT', 5432)),
+    'dbname':   os.getenv('DB_NAME', 'football_analytics'),
+    'user':     os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', '')
 }
-# ─────────────────────────────────────────────────────────────
-
 FILTERED_DIR = 'filtered'   # folder containing filtered CSVs
 
 # ── Helpers ──────────────────────────────────────────────────
